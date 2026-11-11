@@ -1,4 +1,4 @@
-import type { Project, Ticket, Role } from '../data/types'
+import type { Ticket, Role } from '../api/types'
 
 export const VERIFY_THRESHOLD_M = 50
 
@@ -29,28 +29,22 @@ export function timeAgo(iso?: string | null) {
   return `${Math.floor(s / 86400)} d ago`
 }
 
-export type WorkStatus = 'Completed' | 'On track' | 'Delayed' | 'Critical'
-export function plannedProgress(p: Pick<Project, 'startDate' | 'endDate'>): number {
-  const s = new Date(p.startDate).getTime(), e = new Date(p.endDate).getTime()
-  if (e <= s) return 100
-  return Math.round(Math.min(1, Math.max(0, (Date.now() - s) / (e - s))) * 100)
-}
-export function workStatus(p: Project): { status: WorkStatus; planned: number; gap: number } {
-  const planned = plannedProgress(p)
-  const gap = planned - p.progress
-  let status: WorkStatus = 'On track'
-  if (p.progress >= 100) status = 'Completed'
-  else if (Date.now() > new Date(p.endDate).getTime() || gap >= 25) status = 'Critical'
-  else if (gap >= 10) status = 'Delayed'
-  return { status, planned, gap }
-}
+export function slaState(t: Pick<Ticket, 'status' | 'due_at' | 'overdue'>): { overdue: boolean; label: string } {
+  if (t.status === 'Resolved') return { overdue: false, label: 'Resolved - awaiting verification' }
+  if (t.status === 'Closed') return { overdue: false, label: 'Closed' }
 
-export function slaState(t: Ticket): { overdue: boolean; label: string } {
-  if (t.status === 'Resolved') return { overdue: false, label: 'Resolved' }
-  const diff = new Date(t.dueAt).getTime() - Date.now()
+  const diff = new Date(t.due_at).getTime() - Date.now()
   const h = Math.floor(Math.abs(diff) / 3600000), m = Math.floor((Math.abs(diff) % 3600000) / 60000)
   const txt = h >= 24 ? `${Math.floor(h / 24)}d ${h % 24}h` : h > 0 ? `${h}h ${m}m` : `${m}m`
-  return diff < 0 ? { overdue: true, label: `SLA overdue by ${txt}` } : { overdue: false, label: `Due in ${txt}` }
+  return t.overdue || diff < 0 ? { overdue: true, label: `SLA overdue by ${txt}` } : { overdue: false, label: `Due in ${txt}` }
 }
 
 export const isToday = (iso: string) => new Date(iso).toDateString() === new Date().toDateString()
+
+/** Maps a backend notification link (/tickets/X, /projects/X, /deployment, /assets/X) to a mobile route. */
+export function notifRoute(link: string): string {
+  const m = /^\/(tickets|projects|assets)\/(.+)$/.exec(link)
+  if (m) return `/${m[1] === 'tickets' ? 'issues' : m[1] === 'projects' ? 'works' : 'assets'}/${m[2]}`
+  if (link.startsWith('/deployment')) return '/checkin'
+  return '/home'
+}

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Landmark, HardHat, Building2 } from 'lucide-react'
-import { Button, Field, Logo, inputCls, SampleTag } from '../components/ui'
-import { auth, DEMO_OTP } from '../data/store'
-import type { Role } from '../data/types'
+import { Button, Field, Logo, inputCls } from '../components/ui'
+import { requestOtp, useDemoUsers, verifyOtp } from '../api/auth'
+import type { Role } from '../api/types'
 import { toast } from '../lib/toast'
 
 const ROLES: { id: Role; label: string; icon: typeof Landmark; sub: string }[] = [
@@ -19,18 +19,20 @@ export default function Login() {
   const [otp, setOtp] = useState('')
   const [step, setStep] = useState<1 | 2>(1)
   const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const demo = useDemoUsers(role)
 
-  const demo = auth.demoUsers(role)
-
-  const sendOtp = () => {
+  const sendOtp = async () => {
     if (!/^[6-9]\d{9}$/.test(mobile)) return setErr('Enter a valid 10-digit mobile number.')
-    setErr(''); auth.requestOtp(mobile); setStep(2); toast(`OTP sent (demo OTP is ${DEMO_OTP})`)
+    setErr(''); setBusy(true)
+    try { await requestOtp(mobile); setStep(2); toast('OTP sent. For the demo, enter 1234.') }
+    catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
-  const verify = () => {
+  const verify = async () => {
     if (!/^\d{4}$/.test(otp)) return setErr('Enter the 4-digit OTP.')
-    const r = auth.verify(mobile, otp, role)
-    if (!r.ok) return setErr(r.error || 'Failed')
-    nav('/home', { replace: true })
+    setErr(''); setBusy(true)
+    try { await verifyOtp(mobile, otp, role); nav('/home', { replace: true }) }
+    catch (e) { setErr((e as Error).message); setBusy(false) }
   }
 
   return (
@@ -60,25 +62,26 @@ export default function Login() {
               <input className={inputCls} inputMode="numeric" maxLength={10} placeholder="10-digit mobile" value={mobile} onChange={e => { setMobile(e.target.value.replace(/\D/g, '')); setErr('') }} />
             </Field>
             <div className="flex flex-wrap gap-2 items-center text-xs text-gray-500">
-              <span>Demo numbers:</span>
-              {demo.map(u => <button key={u.id} onClick={() => { setMobile(u.mobile); setErr('') }} className="min-h-[36px] px-3 rounded-full bg-gray-100 text-gray-700 font-medium">{u.mobile}</button>)}
+              <span>Demo users:</span>
+              {demo.isPending && <span>loading…</span>}
+              {demo.isError && <span className="text-red-600">cannot reach server <button className="underline" onClick={() => demo.refetch()}>retry</button></span>}
+              {demo.data?.map(u => <button key={u.id} onClick={() => { setMobile(u.phone); setErr('') }} className="min-h-[36px] px-3 rounded-full bg-gray-100 text-gray-700 font-medium" title={u.name}>{u.phone} · {u.name.split(' ')[0]}</button>)}
             </div>
-            <Button full onClick={sendOtp}>Send OTP</Button>
+            <Button full onClick={sendOtp} disabled={busy}>{busy ? 'Sending…' : 'Send OTP'}</Button>
           </>
         ) : (
           <>
-            <p className="text-sm text-gray-600">OTP sent to <b>+91 {mobile}</b>. Demo OTP: <b>{DEMO_OTP}</b></p>
+            <p className="text-sm text-gray-600">OTP sent to <b>+91 {mobile}</b>. Demo OTP: <b>1234</b></p>
             <Field label="Enter OTP" error={err}>
-              <input className={`${inputCls} tracking-[0.5em] text-center text-xl`} inputMode="numeric" maxLength={4} autoFocus value={otp} onChange={e => { setOtp(e.target.value.replace(/\D/g, '')); setErr('') }} />
+              <input className={`${inputCls} tracking-[0.5em] text-center text-xl`} inputMode="numeric" maxLength={4} autoFocus value={otp} onChange={e => { setOtp(e.target.value.replace(/\D/g, '')); setErr('') }} onKeyDown={e => e.key === 'Enter' && verify()} />
             </Field>
-            <Button full onClick={verify}>Verify & Login</Button>
+            <Button full onClick={verify} disabled={busy}>{busy ? 'Verifying…' : 'Verify & Login'}</Button>
             <div className="flex justify-between">
               <Button variant="ghost" onClick={() => { setStep(1); setOtp(''); setErr('') }}>Change number</Button>
-              <Button variant="ghost" onClick={() => toast(`OTP resent (demo OTP is ${DEMO_OTP})`)}>Resend OTP</Button>
+              <Button variant="ghost" disabled={busy} onClick={async () => { try { await requestOtp(mobile); toast('OTP resent. For the demo, enter 1234.') } catch (e) { toast((e as Error).message) } }}>Resend OTP</Button>
             </div>
           </>
         )}
-        <div className="text-center"><SampleTag /></div>
       </div>
     </div>
   )

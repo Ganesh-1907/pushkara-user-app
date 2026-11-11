@@ -1,29 +1,28 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Home, Boxes, ScanLine, Map as MapIcon, User as UserIcon, Hammer, AlertTriangle, WifiOff, RefreshCw } from 'lucide-react'
-import { useDb, useUser, repo, isOffline } from '../data/store'
+import { useUser } from '../api/auth'
+import { syncNow, useOnlineEvents, useOutbox } from '../offline/outbox'
 import { Toaster } from './ui'
 import { toast } from '../lib/toast'
 
-function useOnlineTick() {
-  const [, setN] = useState(0)
-  useEffect(() => {
-    const f = () => setN(n => n + 1)
-    window.addEventListener('online', f); window.addEventListener('offline', f)
-    return () => { window.removeEventListener('online', f); window.removeEventListener('offline', f) }
-  }, [])
+/** Runs the outbox replay and toasts the outcome. Shared by the banner and the Profile screen. */
+export async function runSync() {
+  const r = await syncNow()
+  if (r.stopped && r.synced === 0 && r.failed === 0) toast('Cannot sync while offline')
+  else toast(`Synced ${r.synced}${r.failed ? `, ${r.failed} failed` : ''}${r.stopped ? ' (stopped: connection lost)' : ''}`)
 }
 
 export function OfflineBanner() {
-  const db = useDb()
-  useOnlineTick()
-  const offline = isOffline(db)
-  const pending = db.syncQueue.filter(q => q.status === 'pending').length
-  if (offline) return <div className="shrink-0 bg-gray-900 text-white text-sm px-4 py-2 flex items-center gap-2 pt-safe"><WifiOff size={16} />Offline: submissions are saved on this device ({pending} pending sync)</div>
-  if (pending > 0) return (
+  const o = useOutbox()
+  useOnlineEvents()
+  const [busy, setBusy] = useState(false)
+  if (o.offline) return <div className="shrink-0 bg-gray-900 text-white text-sm px-4 py-2 flex items-center gap-2 pt-safe"><WifiOff size={16} />Offline: submissions are saved on this device ({o.pending} pending sync)</div>
+  if (o.pending > 0 || o.failed > 0) return (
     <div className="shrink-0 bg-amber-100 text-amber-900 text-sm px-4 py-2 flex items-center gap-2 pt-safe">
-      <RefreshCw size={16} /><span className="flex-1">{pending} item(s) pending sync</span>
-      <button onClick={() => { repo.sync.syncNow(); toast('All items synced (simulated)') }} className="min-h-[36px] px-3 rounded-lg bg-amber-600 text-white font-semibold">Sync now</button>
+      <RefreshCw size={16} className={o.syncing ? 'animate-spin' : ''} />
+      <span className="flex-1">{o.pending} item(s) pending sync{o.failed ? `, ${o.failed} failed` : ''}</span>
+      <button disabled={busy || o.syncing} onClick={async () => { setBusy(true); try { await runSync() } finally { setBusy(false) } }} className="min-h-[36px] px-3 rounded-lg bg-amber-600 text-white font-semibold disabled:opacity-50">Sync now</button>
     </div>
   )
   return null

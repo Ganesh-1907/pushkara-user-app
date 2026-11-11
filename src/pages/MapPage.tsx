@@ -1,12 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
+import { useQueries } from '@tanstack/react-query'
 import { MapContainer, TileLayer, Marker } from 'react-leaflet'
 import L from 'leaflet'
 import { useNavigate } from 'react-router-dom'
 import { Navigation, ExternalLink } from 'lucide-react'
-import { useDb, useUser } from '../data/store'
+import { useAssets, useGhats, useProjects } from '../api/queries'
+import { get } from '../api/client'
+import type { Project } from '../api/types'
 import { Badge, Button, Page, Sheet, condTone, workTone } from '../components/ui'
-import { myProjects } from '../lib/selectors'
-import { timeAgo, workStatus } from '../lib/utils'
+import { timeAgo } from '../lib/utils'
 
 type Layer = 'Ghats' | 'Assets' | 'Works'
 type Sel = { kind: Layer; id: string; title: string; sub: string; lat: number; lng: number; badge?: { tone: Parameters<typeof Badge>[0]['tone']; text: string }; to?: string }
@@ -19,16 +21,20 @@ const COND = { Good: '#16a34a', Fair: '#d97706', Poor: '#dc2626', Damaged: '#991
 const WORK = { 'On track': '#16a34a', Completed: '#4f46e5', Delayed: '#d97706', Critical: '#dc2626' } as const
 
 export default function MapPage() {
-  const db = useDb(); const user = useUser()!; const nav = useNavigate()
+  const nav = useNavigate()
+  const gq = useGhats(); const aq = useAssets(); const pq = useProjects()
+  // project coordinates are only on the detail endpoint
+  const details = useQueries({ queries: (pq.data ?? []).map(p => ({ queryKey: ['project', p.id], queryFn: () => get<Project>(`/projects/${p.id}`) })) })
+  const works = details.map(d => d.data).filter((p): p is Project => !!p && p.lat != null && p.lng != null)
+  const ghats = gq.data ?? []; const assets = aq.data ?? []
   const [on, setOn] = useState<Record<Layer, boolean>>({ Ghats: true, Assets: true, Works: true })
   const [sel, setSel] = useState<Sel | null>(null)
-  const works = useMemo(() => myProjects(db, user), [db, user])
 
   const select = (s: Sel) => setSel(s)
   const navUrl = (s: Sel) => `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`
 
   return (
-    <Page title="Map" noPad>
+    <Page title="Map" noPad refresh={[gq, aq, pq]}>
       <div className="absolute inset-0 flex flex-col">
         <div className="shrink-0 bg-white border-b border-gray-200 px-4 py-2 flex gap-2 overflow-x-auto no-scrollbar">
           {(['Ghats', 'Assets', 'Works'] as Layer[]).map(l => (
@@ -39,18 +45,18 @@ export default function MapPage() {
         <div className="flex-1 min-h-0">
           <MapContainer center={[17.0, 81.78]} zoom={12} className="h-full w-full" zoomControl={false}>
             <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            {on.Ghats && db.ghats.map(g => (
+            {on.Ghats && ghats.map(g => (
               <Marker key={g.id} position={[g.lat, g.lng]} icon={icon('#4f46e5', 30, 'G')}
-                eventHandlers={{ click: () => select({ kind: 'Ghats', id: g.id, title: g.name, sub: `${db.assets.filter(a => a.ghatId === g.id).length} assets · ${db.projects.filter(p => p.ghatId === g.id).length} works`, lat: g.lat, lng: g.lng }) }} />
+                eventHandlers={{ click: () => select({ kind: 'Ghats', id: g.id, title: g.name, sub: `${assets.filter(a => a.ghat_id === g.id).length} assets · ${(pq.data ?? []).filter(p => p.ghat_id === g.id).length} works`, lat: g.lat, lng: g.lng }) }} />
             ))}
-            {on.Assets && db.assets.map(a => (
+            {on.Assets && assets.map(a => (
               <Marker key={a.id} position={[a.lat, a.lng]} icon={icon(COND[a.condition], 18)}
-                eventHandlers={{ click: () => select({ kind: 'Assets', id: a.id, title: `${a.type} (${a.id})`, sub: `${db.ghats.find(g => g.id === a.ghatId)?.name} · verified ${timeAgo(a.lastVerified)}`, lat: a.lat, lng: a.lng, badge: { tone: condTone(a.condition), text: a.condition }, to: `/assets/${a.id}` }) }} />
+                eventHandlers={{ click: () => select({ kind: 'Assets', id: a.id, title: `${a.type} (${a.id})`, sub: `${a.ghat_name} · verified ${timeAgo(a.last_verified)}`, lat: a.lat, lng: a.lng, badge: { tone: condTone(a.condition), text: a.condition }, to: `/assets/${a.id}` }) }} />
             ))}
             {on.Works && works.map(p => {
-              const ws = workStatus(p)
-              return <Marker key={p.id} position={[p.lat, p.lng]} icon={icon(WORK[ws.status], 22, 'W')}
-                eventHandlers={{ click: () => select({ kind: 'Works', id: p.id, title: p.name, sub: `${db.ghats.find(g => g.id === p.ghatId)?.name} · ${p.progress}% done vs ${ws.planned}% planned`, lat: p.lat, lng: p.lng, badge: { tone: workTone(ws.status), text: ws.status }, to: `/works/${p.id}` }) }} />
+              const st = p.status as keyof typeof WORK
+              return <Marker key={p.id} position={[p.lat!, p.lng!]} icon={icon(WORK[st] ?? '#6b7280', 22, 'W')}
+                eventHandlers={{ click: () => select({ kind: 'Works', id: p.id, title: p.name, sub: `${p.ghat_name} · ${p.actual_pct}% done vs ${p.planned_pct}% planned`, lat: p.lat!, lng: p.lng!, badge: { tone: workTone(p.status), text: p.status }, to: `/works/${p.id}` }) }} />
             })}
           </MapContainer>
         </div>

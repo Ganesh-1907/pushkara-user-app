@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode, type ButtonHTMLAttributes } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, X, Camera, Inbox, MapPin, Loader2 } from 'lucide-react'
+import { ChevronLeft, X, Camera, Inbox, MapPin, Loader2, RefreshCw, CloudOff } from 'lucide-react'
+import type { UseQueryResult } from '@tanstack/react-query'
 import { takePhoto } from '../native/camera'
 import { onToast } from '../lib/toast'
 import { useGps } from '../lib/useGps'
@@ -44,7 +45,7 @@ export const Badge = ({ tone = 'gray', children }: { tone?: Tone; children: Reac
 export const workTone = (s: string): Tone => ({ 'On track': 'green', Completed: 'indigo', Delayed: 'amber', Critical: 'red' } as Record<string, Tone>)[s] || 'gray'
 export const condTone = (c: string): Tone => ({ Good: 'green', Fair: 'amber', Poor: 'red', Damaged: 'red' } as Record<string, Tone>)[c] || 'gray'
 export const prioTone = (p: string): Tone => ({ Low: 'gray', Medium: 'indigo', High: 'amber', Critical: 'red' } as Record<string, Tone>)[p] || 'gray'
-export const statusTone = (s: string): Tone => ({ Open: 'red', Assigned: 'amber', 'In progress': 'indigo', Resolved: 'green' } as Record<string, Tone>)[s] || 'gray'
+export const statusTone = (s: string): Tone => ({ Open: 'red', Assigned: 'amber', 'In progress': 'indigo', Resolved: 'green', Closed: 'gray', Reopened: 'red' } as Record<string, Tone>)[s] || 'gray'
 
 export function Field({ label, error, hint, children }: { label: string; error?: string; hint?: string; children: ReactNode }) {
   return (
@@ -79,8 +80,32 @@ export function Chips<T extends string>({ value, options, onChange }: { value: T
   )
 }
 
-export function Page({ title, back, right, children, noPad }: { title: string; back?: boolean | string; right?: ReactNode; children: ReactNode; noPad?: boolean }) {
+type AnyQ = Pick<UseQueryResult<unknown>, 'isFetching' | 'refetch' | 'isPending' | 'isError' | 'error' | 'data'>
+
+export function Spinner({ label = 'Loading…' }: { label?: string }) {
+  return <div role="status" className="py-16 flex flex-col items-center gap-2 text-gray-500 text-sm"><Loader2 className="animate-spin" size={28} />{label}</div>
+}
+
+/** Shows loading / error (with retry) until every query has data, then renders children(). */
+export function Gate({ qs, children }: { qs: AnyQ[]; children: () => ReactNode }) {
+  const failed = qs.find(q => q.isError && q.data === undefined)
+  if (failed) {
+    return (
+      <div className="text-center py-12 px-6 text-gray-500" role="alert">
+        <CloudOff className="mx-auto mb-3 text-gray-300" size={44} />
+        <p className="font-semibold text-gray-700">Could not load data</p>
+        <p className="text-sm mt-1">{(failed.error as Error)?.message || 'Unknown error'}</p>
+        <div className="mt-4 flex justify-center"><Button variant="secondary" onClick={() => qs.forEach(q => q.refetch())}><RefreshCw size={16} />Retry</Button></div>
+      </div>
+    )
+  }
+  if (qs.some(q => q.data === undefined)) return <Spinner />
+  return <>{children()}</>
+}
+
+export function Page({ title, back, right, children, noPad, refresh }: { title: string; back?: boolean | string; right?: ReactNode; children: ReactNode; noPad?: boolean; refresh?: AnyQ[] }) {
   const nav = useNavigate()
+  const fetching = !!refresh?.some(q => q.isFetching)
   return (
     <div className="flex flex-col h-full min-h-0">
       <header className="shrink-0 bg-white border-b border-gray-200 pt-safe">
@@ -88,6 +113,7 @@ export function Page({ title, back, right, children, noPad }: { title: string; b
           {back ? <button aria-label="Back" onClick={() => (typeof back === 'string' ? nav(back) : nav(-1))} className="w-11 h-11 flex items-center justify-center rounded-full active:bg-gray-100"><ChevronLeft size={24} /></button> : <div className="w-2" />}
           <h1 className="flex-1 text-lg font-semibold truncate">{title}</h1>
           {right}
+          {refresh && <button aria-label="Refresh" onClick={() => refresh.forEach(q => q.refetch())} disabled={fetching} className="w-11 h-11 flex items-center justify-center rounded-full active:bg-gray-100 text-gray-600"><RefreshCw size={20} className={fetching ? 'animate-spin' : ''} /></button>}
         </div>
       </header>
       <div className={`flex-1 min-h-0 ${noPad ? 'relative' : 'overflow-y-auto p-4 space-y-4'}`}>{children}</div>
@@ -167,9 +193,11 @@ export function GpsField({ gps, label = 'Location (GPS)' }: { gps: ReturnType<ty
 
 export function Toaster() {
   const [msg, setMsg] = useState<string | null>(null)
-  useEffect(() => onToast(m => { setMsg(m); setTimeout(() => setMsg(null), 2600) }), [])
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined
+    const off = onToast(m => { setMsg(m); clearTimeout(t); t = setTimeout(() => setMsg(null), 2600) })
+    return () => { off(); clearTimeout(t) }
+  }, [])
   if (!msg) return null
   return <div role="status" className="absolute left-4 right-4 bottom-24 z-[2000] bg-gray-900 text-white text-sm rounded-xl px-4 py-3 text-center shadow-lg fade-in">{msg}</div>
 }
-
-export const SampleTag = () => <span className="text-[10px] uppercase tracking-wide font-semibold text-gray-500 bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5">Sample data</span>

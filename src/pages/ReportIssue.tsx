@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { repo, useDb } from '../data/store'
+import { useAssets, useGhats } from '../api/queries'
+import { useAction } from '../offline/useAction'
+import type { Priority, Ticket } from '../api/types'
 import { Button, Field, GpsField, Page, PhotoField, Segmented, inputCls } from '../components/ui'
-import { TICKET_CATEGORIES } from '../data/seed'
+import { PRIORITIES, TICKET_CATEGORIES } from '../lib/constants'
 import { useGps } from '../lib/useGps'
 import { toast } from '../lib/toast'
-import type { Priority } from '../data/types'
-
-const PRIORITIES: Priority[] = ['Low', 'Medium', 'High', 'Critical']
 
 export default function ReportIssue() {
-  const db = useDb(); const nav = useNavigate(); const [sp] = useSearchParams()
+  const nav = useNavigate(); const [sp] = useSearchParams()
+  const aq = useAssets(); const gq = useGhats()
+  const act = useAction()
   const preAsset = sp.get('asset') || ''
   const [mode, setMode] = useState<'Asset' | 'Location'>(preAsset ? 'Asset' : 'Location')
   const [assetId, setAssetId] = useState(preAsset)
@@ -21,38 +22,40 @@ export default function ReportIssue() {
   const [photo, setPhoto] = useState<string | undefined>()
   const [errs, setErrs] = useState<Record<string, string>>({})
   const gps = useGps()
+  const assets = aq.data ?? []; const ghats = gq.data ?? []
 
   // auto-fill GPS for free-location reports
   useEffect(() => { if (mode === 'Location' && !gps.fix) gps.locate() }, [mode]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = () => {
+  const submit = async () => {
     const e: Record<string, string> = {}
-    if (mode === 'Asset' && !db.assets.some(a => a.id === assetId)) e.asset = 'Select an asset.'
+    const asset = assets.find(a => a.id === assetId)
+    if (mode === 'Asset' && !asset) e.asset = 'Select an asset.'
     if (mode === 'Location' && !ghatId) e.ghat = 'Select the nearest ghat.'
     if (mode === 'Location' && !gps.fix) e.gps = 'Capture GPS location (or retry).'
     if (!category) e.category = 'Choose a category.'
     if (desc.trim().length < 10) e.desc = 'Describe the issue (at least 10 characters).'
     setErrs(e)
     if (Object.keys(e).length) return
-    const asset = db.assets.find(a => a.id === assetId)
-    const t = repo.tickets.create({
+    const body = {
       title: `${category}${asset ? ` - ${asset.type}` : ''}: ${desc.trim().slice(0, 40)}`, category, priority, description: desc.trim(),
-      assetId: mode === 'Asset' ? assetId : undefined,
-      ghatId: mode === 'Asset' ? asset?.ghatId : ghatId,
-      lat: mode === 'Asset' ? asset?.lat : gps.fix?.lat, lng: mode === 'Asset' ? asset?.lng : gps.fix?.lng, photo,
-    })
-    toast(`Issue ${t.id} created`)
-    nav(`/issues/${t.id}`, { replace: true })
+      asset_id: mode === 'Asset' ? assetId : undefined,
+      ghat_id: mode === 'Asset' ? asset?.ghat_id : ghatId,
+      lat: mode === 'Asset' ? asset?.lat : gps.fix?.lat, lng: mode === 'Asset' ? asset?.lng : gps.fix?.lng,
+    }
+    const r = await act.run<Ticket>({ type: 'ticket.create', label: `New issue: ${category}`, method: 'POST', path: '/tickets', body, photos: { photo_url: photo } }, { ok: t => `Issue ${t.id} created` })
+    if (!r) return
+    nav(r.queued ? '/issues' : `/issues/${r.data!.id}`, { replace: true })
   }
 
   return (
-    <Page title="Report an issue" back>
+    <Page title="Report an issue" back refresh={[aq, gq]}>
       <Segmented value={mode} options={['Asset', 'Location'] as const} onChange={m => { setMode(m); setErrs({}) }} />
       {mode === 'Asset' ? (
         <Field label="Asset" error={errs.asset}>
           <select className={inputCls} value={assetId} onChange={e => setAssetId(e.target.value)}>
-            <option value="">Select asset…</option>
-            {db.assets.map(a => <option key={a.id} value={a.id}>{a.id} · {a.type} · {db.ghats.find(g => g.id === a.ghatId)?.name}</option>)}
+            <option value="">{aq.isPending ? 'Loading assets…' : 'Select asset…'}</option>
+            {assets.map(a => <option key={a.id} value={a.id}>{a.id} · {a.type} · {a.ghat_name}</option>)}
           </select>
         </Field>
       ) : (
@@ -60,15 +63,15 @@ export default function ReportIssue() {
           <Field label="Nearest ghat" error={errs.ghat}>
             <select className={inputCls} value={ghatId} onChange={e => setGhatId(e.target.value)}>
               <option value="">Select ghat…</option>
-              {db.ghats.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              {ghats.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           </Field>
           <GpsField gps={gps} />
           {errs.gps && <p className="text-xs text-red-600 -mt-2">{errs.gps}</p>}
           {gps.error && !gps.fix && (
             <button className="min-h-[44px] text-sm text-brand-700 font-medium" onClick={() => {
-              const g = db.ghats.find(x => x.id === ghatId); if (g) gps.setFix({ lat: g.lat, lng: g.lng, accuracy: 50 }); else toast('Select a ghat first')
-            }}>Use selected ghat location instead</button>
+              const g = ghats.find(x => x.id === ghatId); if (g) gps.setFix({ lat: g.lat, lng: g.lng, accuracy: 50 }); else toast('Select a ghat first')
+            }}>Demo: use selected ghat location instead</button>
           )}
         </>
       )}
@@ -85,7 +88,7 @@ export default function ReportIssue() {
       </div>
       <Field label="Description" error={errs.desc}><textarea className={inputCls} rows={4} value={desc} onChange={e => setDesc(e.target.value)} placeholder="What is the problem?" /></Field>
       <PhotoField value={photo} onChange={setPhoto} />
-      <Button full onClick={submit}>Submit issue</Button>
+      <Button full disabled={act.pending} onClick={submit}>{act.pending ? 'Submitting…' : 'Submit issue'}</Button>
     </Page>
   )
 }

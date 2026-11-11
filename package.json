@@ -4,11 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host",
+    "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.107.1",
     "html5-qrcode": "^2.3.8",
     "leaflet": "1.9",
     "lucide-react": "^1.71.0",

@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Logo } from '../components/ui'
-import { getUser } from '../data/store'
+import { getUser } from '../api/auth'
 
 export default function Splash() {
   const nav = useNavigate()

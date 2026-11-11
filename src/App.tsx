@@ -1,5 +1,6 @@
+import { useEffect } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import { useUser } from './data/store'
+import { refreshMe, useUser } from './api/auth'
 import { Frame } from './components/Shell'
 import Splash from './pages/Splash'
 import Login from './pages/Login'
@@ -23,6 +24,8 @@ import ProfilePage from './pages/Profile'
 export default function App() {
   const user = useUser()
   const loc = useLocation()
+  const uid = user?.id
+  useEffect(() => { if (uid) refreshMe().catch(() => { /* 401 logs out; network errors are ignored */ }) }, [uid])
   const isPublic = loc.pathname === '/' || loc.pathname === '/login'
   const guard = (el: JSX.Element) => (user ? el : <Navigate to="/login" replace />)
   return (

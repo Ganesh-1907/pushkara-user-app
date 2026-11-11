@@ -1,34 +1,47 @@
 # Sutrana Mobile (prototype)
 
-Field app for Godavari Pushkaralu management (digital projects, vendors, assets). Frontend-only: React 18 + TypeScript + Vite + Tailwind, HashRouter, Leaflet (OSM), html5-qrcode. All data is **sample data** in localStorage, accessed only through `src/data/store.ts`.
+Field app for Godavari Pushkaralu management (digital projects, vendors, assets). React 18 + TypeScript + Vite + Tailwind, HashRouter, Leaflet (OSM), html5-qrcode. Talks to the Sutrana FastAPI backend.
 
-## Run / build
+## Environment
 
-```bash
-npm install
-npm run dev        # http://localhost:5173 (use a phone-size window; wide screens show a 420px frame)
-npm run build      # tsc --noEmit + vite build -> dist/
-npx tsc --noEmit
+`.env` (git-ignored; copy `.env.example`):
+
+```
+VITE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
-Demo login: pick a role, mobile (tap a demo number chip), OTP `1234`.
-Demo numbers: staff 9000000011/12/13, vendor 9000000021/22, officer 9000000002.
-Profile -> "Reset demo data" restores the seed. Profile -> "Simulate offline mode" tests the offline queue (or use browser DevTools offline).
-Demo helpers: "simulate being at the asset/ghat" buttons exist because desktop GPS is rarely near Rajahmundry.
+On a **real device or emulator** `127.0.0.1` is the device itself. Use the dev machine's LAN IP (e.g. `http://192.168.1.20:8000`) or `http://10.0.2.2:8000` for the Android emulator. The backend `CORS_ORIGINS` must include the app origin (`http://localhost:5174`, `capacitor://localhost`, `http://localhost`, or `http://<LAN-IP>:5174` when opening the dev server from a phone).
 
-## Folder structure
+## Run order
+
+```bash
+docker start sutrana-pg                                  # 1. postgres (127.0.0.1:5434)
+cd ../sutrana-backend && .venv/bin/uvicorn app.main:app --port 8000   # 2. backend
+cd ../sutrana-mobile && npm install && npm run dev       # 3. mobile -> http://localhost:5174 (strict port, LAN-exposed)
+npm run build        # tsc --noEmit + vite build -> dist/
+```
+
+Login: pick a role, tap a demo user chip (from `GET /auth/demo-users`), OTP `1234`.
+Demo helpers: "simulate being at the asset/ghat" (and "far away") buttons exist because desktop GPS is rarely near Rajahmundry. Reset demo data is admin-only on the backend.
+
+## Architecture
 
 ```
 src/
-  data/       types.ts, seed.ts (sample data), store.ts (repository API, auth, subscribe hook, reset)
+  api/        client.ts (fetch wrapper, token, errors, 401 -> logout), types.ts, auth.ts, queries.ts (TanStack Query reads), uploads.ts, queryClient.ts
+  offline/    outbox.ts (localStorage outbox + Sync now replay), useAction.ts (run mutation or queue it, toast, refresh)
   native/     camera.ts, geolocation.ts, scanner.ts, notifications.ts  (device wrappers, swap for Capacitor)
-  lib/        utils.ts (distance, delay status, SLA), selectors.ts (role visibility, notifications), useGps.ts, toast.ts
-  components/ ui.tsx (buttons, sheets, fields), Shell.tsx (frame, tab bar, offline banner), TicketActions.tsx
-  pages/      Splash, Login, Home, Scan, Assets, AssetDetail, Works, WorkDetail, ReportIssue,
-              Issues, IssueDetail, Maintenance, Inspections, InspectionForm, Checkin, MapPage, Notifications, Profile
+  lib/        utils.ts, constants.ts (form option lists), useGps.ts, toast.ts
+  components/ ui.tsx, Shell.tsx (frame, tab bar, offline banner), TicketActions.tsx
+  pages/      Splash, Login, Home, Scan, Assets, AssetDetail, Works, WorkDetail, ReportIssue, Issues, IssueDetail,
+              Maintenance, Inspections, InspectionForm, Checkin, MapPage, Notifications, Profile
 ```
 
-Rules: work delay = planned% (from start/end dates) minus actual%; gap >= 10 Delayed, >= 25 or past end date Critical. Asset verify passes within 50 m. SLA hours by priority: Critical 4, High 12, Medium 48, Low 96.
+Ticket lifecycle: Open > Assigned > In progress > Resolved > Closed (+ Reopened). The reporter sees Confirm fixed / Reopen (reason) on a Resolved ticket; assignees/vendors Start (also from Reopened) and Resolve. Close/Reopen go through the offline outbox like other actions.
+
+All business data comes from the API. localStorage holds only the auth session and the offline outbox.
+Photos are taken via `native/camera.ts`, uploaded with `POST /uploads`, and only the returned URL is sent.
+Offline (real, or Profile -> "Simulate offline"): mutations are queued as `{type, method, path, body}` and replayed in order by "Sync now" (marked synced/failed). Lists have a refresh button.
 
 ## Capacitor setup (not installed here)
 
@@ -55,26 +68,3 @@ Vite `base` is `./` and routing is HashRouter, so the build works from the Capac
 | `src/native/notifications.ts` | in-app inbox + Notification API | `@capacitor/push-notifications` |
 
 Add permission strings: Android `CAMERA`, `ACCESS_FINE_LOCATION`; iOS `NSCameraUsageDescription`, `NSLocationWhenInUseUsageDescription`.
-
-## Replacing the store with a real API
-
-Screens call `repo.*`, `auth.*`, `useDb()`, `useUser()` only. Reimplement those on top of fetch + a cache; keep the signatures (make mutations async). Offline queue: `syncQueue` in the store becomes a real outbox flushed on reconnect.
-
-### Backend endpoints needed
-
-```
-POST /auth/otp/request {mobile}            POST /auth/otp/verify {mobile, otp, role} -> {token, user}
-GET  /me                                   GET  /ghats   GET /departments   GET /vendors
-GET  /assets?ghat=&condition=&q=           GET  /assets/:id     POST /assets/:id/verify {lat,lng,distance,photo}
-PATCH /assets/:id/condition {condition,note}
-GET  /projects?mine=true                   GET /projects/:id
-PATCH /projects/:id/progress {progress,remarks,photo}      PATCH /projects/:id/milestones/:mid {done}
-GET  /tickets?scope=reported|assigned|open POST /tickets    GET /tickets/:id
-POST /tickets/:id/accept | /start | /resolve {note,photo}
-GET  /inspections   POST /inspections {draft|submitted}     PUT /inspections/:id
-GET  /deployments?ghat=   PATCH /deployments/:id {actual}   POST /checkins {ghat,type,lat,lng}
-GET  /notifications   POST /notifications/:id/read   POST /notifications/read-all
-POST /devices {pushToken}                  POST /sync (batched offline outbox)
-GET  /dashboard/summary                    (officer KPIs)
-```
-Photos: upload as multipart/object storage and store URLs instead of data URLs.
